@@ -3,15 +3,12 @@
 class Program
 {
     readonly static String CODE = @"
-DEF two
+DEF test
+VAR number 5
 ENDDEF
 
 DEF main
-VAR five 5
-VAR kek 27
-VAR res 0
-ADD $five $kek $res
-CALL two
+CALL test
 ENDDEF
 
 CALL main
