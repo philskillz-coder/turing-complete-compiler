@@ -3,238 +3,21 @@ using System.Collections.Generic;
 using System.ComponentModel;
 using System.ComponentModel.DataAnnotations;
 using System.Linq;
+using System.Runtime.CompilerServices;
 using System.Runtime.Loader;
 using System.Text;
 using System.Threading.Tasks;
+
 
 namespace compiler;
 
 internal class Compiler
 {
-    private enum KEYWORDS
-    {
-        ALU_ADD = 0,
-        ALU_SUBTRACT = 1,
-        ALU_AND = 2,
-        ALU_OR = 3,
-        ALU_NOT = 4,
-        ALU_XOR = 5,
-        ALU_MOVE = 6,
-
-        CONDITIONS_EQUAL = 0,
-        CONDITIONS_NOTEQUAL = 1,
-        CONDITIONS_SMALLER = 2,
-        CONDITIONS_SMALLEREQUAL = 3,
-        CONDITIONS_GREATER = 4,
-        CONDITIONS_GREATEREQUAL = 5,
-        CONDITIONS_ALLWAYS = 6,
-        CONDITIONS_NEVER = 7,
-
-        OP_IMMEDIATE0 = 128,
-        OP_IMMEDIATE1 = 64,
-        OP_ALU = 0,
-        OP_CONDITIONS = 16,
-        OP_SHIFTLEFT = 32,
-        OP_SHIFTRIGHT = 48
-    }
-
-    private enum ADDRESSES
-    {
-        RAM = 0,
-        JB_RAM = 1,
-        CLOCK = 2,
-        RAM_ADDRESS = 3,
-        JB_RAM_ADDRESS = 4,
-        RAM_TEMP_0 = 5,
-        RAM_TEMP_1 = 6,
-        JUMP_ADDRESS = 7,
-        JB_LATEST = 8
-    }
-
-    private class Definition
-    {
-        public int StartInstruction { get; set; }
-
-        public int EndInstruction{ get; set; }
-
-        public int ResultStartIndex { get; set; }
-    }
-
-    private class DefinitionManager
-    {
-        private readonly Dictionary<string, Definition> definitions = new Dictionary<string, Definition>();
-        private readonly List<Definition> openDefinitions = new List<Definition>();
-        private readonly List<Definition> openCodeDefinitions = new List<Definition>();
-
-        public DefinitionManager() { }
-
-        public bool ResolveDefinition(string rawDefinition, out Definition? definition)
-        {
-            return definitions.TryGetValue(rawDefinition, out definition);
-        }
-
-        public bool DefinitionExists(string definitionName)
-        {
-            return definitions.ContainsKey(definitionName);
-        }
-
-        public bool CreateDefinition(string name, int startInstruction, int resultStartIndex, out Definition? definition)
-        {
-            if (definitions.ContainsKey(name))
-            {
-                definition = null;
-                return false;
-            }
-
-            definitions[name] = new Definition() {
-                StartInstruction = startInstruction,
-                ResultStartIndex = resultStartIndex
-            };
-
-            definition = definitions[name];
-            return true;
-        }
-
-        public Definition Latest()
-        {
-            return definitions.Last().Value;
-        }
-
-
-        public void AddOpenCodeDefinition(Definition definition)
-        {
-            openCodeDefinitions.Add(definition);
-        }
-
-        public Definition LatestOpenCodeDefinition()
-        {
-            return openCodeDefinitions.Last();
-        }
-
-        public void CloseLatestOpenCodeDefinition()
-        {
-            openCodeDefinitions.RemoveAt(openCodeDefinitions.Count - 1);
-        }
-
-        public int OpenCodeDefinitionCount()
-        {
-            return openCodeDefinitions.Count;
-        }
-
-
-    }
-
-    private class Scope
-    {
-        private readonly Dictionary<string, int> variables = new Dictionary<string, int>();
-        public readonly string name;
-
-        public Scope(string scopeName) {
-            name = scopeName;
-        }
-
-        public bool VariableExists(string varName)
-        {
-            return variables.ContainsKey(varName);
-        }
-
-        public bool ResolveVarName(string varName, out int resolved)
-        {
-            return variables.TryGetValue(varName, out resolved);
-        }
-
-        public bool ResolveAddress(string rawAddress, out int address, out bool immediate)
-        {
-            if (rawAddress.StartsWith("$"))
-            {
-                immediate = false;
-                var resolved = ResolveVarName(rawAddress.Substring(1), out address);
-                return resolved;
-            }
-            else if (rawAddress.StartsWith("@"))
-            {
-                immediate = false;
-                bool issResolved = int.TryParse(rawAddress.Substring(1), out address);
-                return issResolved;
-            }
-            immediate = true;
-            var isResolved = int.TryParse(rawAddress, out address);
-            return isResolved;
-        }
-
-        public bool SetVariable(string name, int address)
-        {
-            if (!variables.ContainsKey(name))
-            {
-                variables.Add(name, address);
-                return false;
-            }
-            variables[name] = address;
-            return true;
-        }
-    }
-
-    private class ScopeManager
-    {
-        public Scope currentScope;
-        private readonly Dictionary<string, Scope> scopes = new Dictionary<string, Scope>();
-
-        public ScopeManager(Scope scope)
-        {
-            scopes[scope.name] = scope;
-            currentScope = scope;
-        }
-
-        public bool SetCurrentScope(Scope scope)
-        {
-            currentScope = scope;
-            return true;
-        }
-
-        public bool CreateScope(string name, out Scope? scope)
-        {
-            if (scopes.ContainsKey(name))
-            {
-                scope = null;
-                return false;
-            }
-
-            scopes[name] = new Scope(name);
-            scope = scopes[name];
-            return true;
-
-        }
-
-        public bool GetScope(string name, out Scope? scope)
-        {
-            return scopes.TryGetValue(name, out scope);
-        }
-
-    }
-
-    private class MemoryManager
-    {
-        private readonly Dictionary<int, bool> ramAddresses = Enumerable.Range(0, 255).ToDictionary(key => key, value => false);
-        private readonly Dictionary<int, bool> callStack = Enumerable.Range(0, 255).ToDictionary(key => key, value => false);
-        private readonly Dictionary<int, bool> registerAddresses = Enumerable.Range(3, 11).ToDictionary(key => key, value => false);
-
-        public bool GetNonOccupiedRamAddress(out int? address)
-        {
-            address = ramAddresses.FirstOrDefault(kv => !kv.Value).Key;
-            if (address != null)
-            {
-                ramAddresses[address.Value] = true;
-                return true;
-            }
-            return false;
-        }
-
-    }
 
     private readonly ScopeManager scopeManager = new ScopeManager(new Scope("global"));
     private readonly DefinitionManager definitionManager = new DefinitionManager();
     private readonly MemoryManager memoryManager = new MemoryManager();
-    
+
     private readonly string code;
     private readonly List<String> result = new List<string>();
 
@@ -242,25 +25,44 @@ internal class Compiler
     private int line = 0;
     private int callDepth = 0;
 
+    private readonly bool do_comments;
+    private readonly string comment_prefix;
+    private readonly bool add_instruction_numbers;
 
-    public Compiler(string code)
+
+
+    public Compiler(string code, bool do_comments, string comment_prefix, bool add_instruction_numbers)
     {
         this.code = code;
+        this.do_comments = do_comments;
+        this.comment_prefix = comment_prefix;
+        this.add_instruction_numbers = add_instruction_numbers;
         Process();
+    }
+
+    private string Comment(string text)
+    {
+        return do_comments ? comment_prefix + Instruction_Number() + text : "";
+    }
+    private string Instruction_Number()
+    {
+        int c = result.Count()*4;
+        return add_instruction_numbers ? $"[{c}, {c+1}, {c+2}, {c+3}]" : "";
     }
 
     private void ProcessLine(string line)
     {
+        line = line.Trim();
         string[] keywords = line.Split(" ");
         switch (keywords[0].Trim())
         {
-            case "VAR":
+            case "SET":
                 {
                     // $VAR variable
                     // $ADDR address
                     // 0123 normal
 
-                    string name = keywords[1].Trim();
+                    string destination = keywords[1].Trim();
                     string value = keywords[2].Trim();
 
                     // get value for variable
@@ -269,25 +71,39 @@ internal class Compiler
                         throw new Exception("Memory address could not be resolved");
                     }
 
-                    int sourceAddress = -1;
-                    if (scopeManager.currentScope.VariableExists(name))
+                    int destinationAddress = -1;
+
+                    // get variable destination
+                    if (destination.StartsWith(STYLES.POINTER)) // pointer
                     {
-                        scopeManager.currentScope.SetVariable(name, valueAddress);
-                    }
-                    else
-                    {
-                        if (!memoryManager.GetNonOccupiedRamAddress(out int? _sourceAddress) || _sourceAddress == null)
-                        {
-                            throw new Exception("No memory address available");
+                        if (!int.TryParse(destination.Substring(STYLES.POINTER.Length), out destinationAddress)) {
+                            throw new Exception("Source address not valid");
                         }
 
-                        sourceAddress = _sourceAddress.Value;
-                        scopeManager.currentScope.SetVariable(name, sourceAddress);
+                        // if its a pointer, dont create a variable
+                        //scopeManager.currentScope.SetVariable(destination, valueAddress);
+                    }
+                    else if (destination.StartsWith(STYLES.VARIABLE)) // variable
+                    {
                         
+                        if (!scopeManager.currentScope.VariableExists(destination.Substring(STYLES.VARIABLE.Length))) // variable doesnt exist
+                        {
+                            if (!memoryManager.GetNonOccupiedRamAddress(out int? _sourceAddress) || _sourceAddress == null) // no memory available
+                            {
+                                throw new Exception("No memory available");
+                            }
+                            destinationAddress = _sourceAddress.Value;
+                        }
+                        
+                        scopeManager.currentScope.SetVariable(destination.Substring(1), destinationAddress);
+                    }
+                    else // no correct variable name
+                    {
+                        throw new Exception("Variable destination must be a pointer or variable address");
                     }
 
-                    result.Add($"{(int)KEYWORDS.ALU_MOVE + (int)KEYWORDS.OP_IMMEDIATE0} {sourceAddress} 0 {(int) ADDRESSES.RAM_ADDRESS}"); // move the source (ram) address to register 0
-                    result.Add($"{(int)KEYWORDS.ALU_MOVE + (valueImmediate ? 1 : 0) * (int)KEYWORDS.OP_IMMEDIATE0} {valueAddress} 0 {(int) ADDRESSES.RAM}"); // move the value to ram
+                    result.Add($"{ALU.MOVE + OP.IMMEDIATE0} {destinationAddress} 0 { ADDRESSES.RAM_ADDRESS}{Comment("Move source address to ram-address-register")}"); // move the source (ram) address to register 0
+                    result.Add($"{ALU.MOVE + (valueImmediate ? 1 : 0) * OP.IMMEDIATE0} {valueAddress} 0 { ADDRESSES.RAM}{Comment("Move value to ram")}"); // move the value to ram
                     break;
                 }
 
@@ -318,12 +134,30 @@ internal class Compiler
                     if (!address0Immediate && !address1Immediate) // both in ram
                     {
                         // todo: use register addresses
-                        result.Add($"{(int)KEYWORDS.ALU_MOVE + KEYWORDS.OP_IMMEDIATE0} {address0} 0 {(int) ADDRESSES.RAM_ADDRESS}"); // move first address to ram read
-                        result.Add($"{(int)KEYWORDS.ALU_MOVE} 0 0 {(int) ADDRESSES.RAM_TEMP_0}");
-                        result.Add($"{6 + 128} {address1} 0 {(int) ADDRESSES.RAM_ADDRESS}"); // move second address to ram read
-                        result.Add($"{(int)KEYWORDS.ALU_MOVE} 0 0 {(int) ADDRESSES.RAM_TEMP_1}");
-                        result.Add($"{(int)KEYWORDS.ALU_MOVE + KEYWORDS.OP_IMMEDIATE0} {resultAddress} 0 {(int)ADDRESSES.RAM_ADDRESS}"); // move result address to ram write
-                        result.Add($"{(int)KEYWORDS.ALU_ADD} {(int) ADDRESSES.RAM_TEMP_0} {(int) ADDRESSES.RAM_TEMP_1} {(int) ADDRESSES.RAM}");
+                        result.Add($"{ALU.MOVE + OP.IMMEDIATE0} {address0} 0 { ADDRESSES.RAM_ADDRESS}{Comment("Move first address to ram-address-register")}"); // move first address to ram read
+                        result.Add($"{ALU.MOVE} 0 0 { ADDRESSES.RAM_TEMP_0}{Comment("Move first value to ram-temp-0")}");
+                        result.Add($"{ALU.MOVE + OP.IMMEDIATE0} {address1} 0 { ADDRESSES.RAM_ADDRESS}{Comment("Move second address to ram-address-register")}"); // move second address to ram read
+                        result.Add($"{ALU.MOVE} 0 0 { ADDRESSES.RAM_TEMP_1}{Comment("Move second value to ram-temp-1")}");
+                        result.Add($"{ALU.MOVE + OP.IMMEDIATE0} {resultAddress} 0 {ADDRESSES.RAM_ADDRESS}{Comment("Move result address to ram-address-register")}"); // move result address to ram write
+                        result.Add($"{ALU.ADD} { ADDRESSES.RAM_TEMP_0} { ADDRESSES.RAM_TEMP_1} { ADDRESSES.RAM}{Comment("Add values from ram-temp-0 and -1 and move result to ram")}");
+                    }
+
+                    if (address1Immediate)
+                    {
+                        result.Add($"{ALU.MOVE + OP.IMMEDIATE0} {address0} 0 {ADDRESSES.RAM_ADDRESS}{Comment("Move first address to ram-address-register")}"); // move first address to ram read
+                        result.Add($"{ALU.MOVE} 0 0 {ADDRESSES.RAM_TEMP_0}{Comment("Move first value to ram-temp-0")}");
+
+                        result.Add($"{ALU.MOVE + OP.IMMEDIATE0} {resultAddress} 0 {ADDRESSES.RAM_ADDRESS}{Comment("Move result address to ram-address-register")}"); // move result address to ram write
+                        result.Add($"{ALU.ADD + OP.IMMEDIATE1} {ADDRESSES.RAM_TEMP_0} {address1} {ADDRESSES.RAM}{Comment("Add value from ram-temp-0 and immediate-value-1 and move result to ram")}");
+                    }
+
+                    if (address0Immediate)
+                    {
+                        result.Add($"{ALU.MOVE + OP.IMMEDIATE0} {address1} 0 {ADDRESSES.RAM_ADDRESS}{Comment("Move second address to ram-address-register")}"); // move second address to ram read
+                        result.Add($"{ALU.MOVE} 0 0 {ADDRESSES.RAM_TEMP_0}{Comment("Move second value to ram-temp-0")}");
+
+                        result.Add($"{ALU.MOVE + OP.IMMEDIATE0} {resultAddress} 0 {ADDRESSES.RAM_ADDRESS}{Comment("Move result address to ram-address-register")}"); // move result address to ram write
+                        result.Add($"{ALU.ADD + OP.IMMEDIATE0} {address0} {ADDRESSES.RAM_TEMP_0} {ADDRESSES.RAM}{Comment("Add immediate-value-0 and value from ram-temp-0 and move result to ram")}");
                     }
                     break;
                 }
@@ -355,12 +189,30 @@ internal class Compiler
                     if (!address0Immediate && !address1Immediate) // both in ram
                     {
                         // todo: use register addresses
-                        result.Add($"{(int)KEYWORDS.ALU_MOVE + KEYWORDS.OP_IMMEDIATE0} {address0} 0  {(int)ADDRESSES.RAM_ADDRESS}"); // move first address to ram read
-                        result.Add($"{(int)KEYWORDS.ALU_MOVE} 0 0 {(int) ADDRESSES.RAM_TEMP_0}");
-                        result.Add($"{6 + 128} {address1} 0 {(int) ADDRESSES.RAM_ADDRESS}"); // move second address to ram read
-                        result.Add($"{(int)KEYWORDS.ALU_MOVE} 0 0 {(int) ADDRESSES.RAM_TEMP_1}");
-                        result.Add($"{(int)KEYWORDS.ALU_MOVE + KEYWORDS.OP_IMMEDIATE0} {resultAddress} 0 {(int) ADDRESSES.RAM_ADDRESS}"); // move result address to ram write
-                        result.Add($"{(int)KEYWORDS.ALU_SUBTRACT} {(int) ADDRESSES.RAM_TEMP_0} {(int) ADDRESSES.RAM_TEMP_1} {(int) ADDRESSES.RAM}");
+                        result.Add($"{ALU.MOVE + OP.IMMEDIATE0} {address0} 0 {ADDRESSES.RAM_ADDRESS}{Comment("Move first address to ram-address-register")}"); // move first address to ram read
+                        result.Add($"{ALU.MOVE} 0 0 {ADDRESSES.RAM_TEMP_0}{Comment("Move first value to ram-temp-0")}");
+                        result.Add($"{ALU.MOVE + OP.IMMEDIATE0} {address1} 0 {ADDRESSES.RAM_ADDRESS}{Comment("Move second address to ram-address-register")}"); // move second address to ram read
+                        result.Add($"{ALU.MOVE} 0 0 {ADDRESSES.RAM_TEMP_1}{Comment("Move second value to ram-temp-1")}");
+                        result.Add($"{ALU.MOVE + OP.IMMEDIATE0} {resultAddress} 0 {ADDRESSES.RAM_ADDRESS}{Comment("Move result address to ram-address-register")}"); // move result address to ram write
+                        result.Add($"{ALU.SUBTRACT} {ADDRESSES.RAM_TEMP_0} {ADDRESSES.RAM_TEMP_1} {ADDRESSES.RAM}{Comment("Add values from ram-temp-0 and -1 and move result to ram")}");
+                    }
+
+                    if (address1Immediate)
+                    {
+                        result.Add($"{ALU.MOVE + OP.IMMEDIATE0} {address0} 0 {ADDRESSES.RAM_ADDRESS}{Comment("Move first address to ram-address-register")}"); // move first address to ram read
+                        result.Add($"{ALU.MOVE} 0 0 {ADDRESSES.RAM_TEMP_0}{Comment("Move first value to ram-temp-0")}");
+
+                        result.Add($"{ALU.MOVE + OP.IMMEDIATE0} {resultAddress} 0 {ADDRESSES.RAM_ADDRESS}{Comment("Move result address to ram-address-register")}"); // move result address to ram write
+                        result.Add($"{ALU.SUBTRACT + OP.IMMEDIATE1} {ADDRESSES.RAM_TEMP_0} {address1} {ADDRESSES.RAM}{Comment("Add value from ram-temp-0 and immediate-value-1 and move result to ram")}");
+                    }
+
+                    if (address0Immediate)
+                    {
+                        result.Add($"{ALU.MOVE + OP.IMMEDIATE0} {address1} 0 {ADDRESSES.RAM_ADDRESS}{Comment("Move second address to ram-address-register")}"); // move second address to ram read
+                        result.Add($"{ALU.MOVE} 0 0 {ADDRESSES.RAM_TEMP_0}{Comment("Move second value to ram-temp-0")}");
+
+                        result.Add($"{ALU.MOVE + OP.IMMEDIATE0} {resultAddress} 0 {ADDRESSES.RAM_ADDRESS}{Comment("Move result address to ram-address-register")}"); // move result address to ram write
+                        result.Add($"{ALU.SUBTRACT + OP.IMMEDIATE0} {address0} {ADDRESSES.RAM_TEMP_0} {ADDRESSES.RAM}{Comment("Add immediate-value-0 and value from ram-temp-0 and move result to ram")}");
                     }
                     break;
                 }
@@ -368,7 +220,7 @@ internal class Compiler
             case "DEF":
                 {
                     string name = keywords[1].Trim();
-                    int currentPosition = (result.Count+2) * 4;
+                    int currentPosition = (result.Count+1) * 4;
                     inDefinition = true;
 
                     if (!definitionManager.CreateDefinition(name, currentPosition, result.Count, out Definition? definition) || definition == null)
@@ -397,20 +249,18 @@ internal class Compiler
                     inDefinition = false;
 
                     // +6 for 6 extra actions
-                    int currentPosition = (result.Count+6) * 4;
+                    int currentPosition = (result.Count+4) * 4;
                     Definition definition = definitionManager.LatestOpenCodeDefinition();
                     definitionManager.CloseLatestOpenCodeDefinition();
 
                     // inject a jump-to reference before the definition start to jump to the instruction where the definition ends
-                    result.Insert(definition.ResultStartIndex, $"{(int) KEYWORDS.OP_ALU + (int) KEYWORDS.ALU_MOVE + (int) KEYWORDS.OP_IMMEDIATE0} {currentPosition} 0 {(int) ADDRESSES.JUMP_ADDRESS}");
-                    result.Insert(definition.ResultStartIndex+1, $"{(int) KEYWORDS.OP_CONDITIONS + (int) KEYWORDS.CONDITIONS_ALLWAYS} 0 0 0");
+                    result.Insert(definition.ResultStartIndex, $"{ OP.ALU +  ALU.MOVE +  OP.IMMEDIATE0} {currentPosition} 0 { ADDRESSES.CLOCK}{Comment("Jump to the end of the definition")}");
 
                     // jump-back to origin
-                    result.Add($"{(int) KEYWORDS.OP_ALU + (int) KEYWORDS.ALU_SUBTRACT + (int) KEYWORDS.OP_IMMEDIATE1} {(int) ADDRESSES.JB_LATEST} 1 {(int) ADDRESSES.JB_LATEST}");
-                    result.Add($"{(int) KEYWORDS.OP_ALU + (int) KEYWORDS.ALU_MOVE} {(int) ADDRESSES.JB_LATEST} 0 {(int) ADDRESSES.JB_RAM_ADDRESS}");
+                    result.Add($"{ OP.ALU + ALU.SUBTRACT + OP.IMMEDIATE1} { ADDRESSES.JB_LATEST} 1 { ADDRESSES.JB_LATEST}{Comment("Subtract 1 from the latest jump-back-address")}");
+                    result.Add($"{ OP.ALU + ALU.MOVE} { ADDRESSES.JB_LATEST} 0 { ADDRESSES.JB_RAM_ADDRESS}{Comment("Move the value from the jump-back-register to the jump-back-ram-address-register")}");
                     
-                    result.Add($"{(int) KEYWORDS.OP_ALU + (int) KEYWORDS.ALU_MOVE} {(int) ADDRESSES.JB_RAM} 0 {(int) ADDRESSES.JUMP_ADDRESS}");
-                    result.Add($"{(int) KEYWORDS.OP_CONDITIONS + (int) KEYWORDS.CONDITIONS_ALLWAYS} 0 0 0");
+                    result.Add($"{ OP.ALU +  ALU.MOVE} { ADDRESSES.JB_RAM} 0 { ADDRESSES.CLOCK}{Comment("Jump to the instruction from the jump-back-ram")}");
                     
                     break;
                 }
@@ -424,14 +274,13 @@ internal class Compiler
                         throw new Exception("Definition not found");
                     }
 
-                    result.Add($"{(int) KEYWORDS.OP_ALU + (int) KEYWORDS.ALU_MOVE} {(int)ADDRESSES.JB_LATEST} 0 {(int) ADDRESSES.JB_RAM_ADDRESS}");
-                    result.Add($"{(int)KEYWORDS.OP_ALU + (int)KEYWORDS.ALU_ADD + (int)KEYWORDS.OP_IMMEDIATE1} {(int)ADDRESSES.JB_LATEST} 1 {(int)ADDRESSES.JB_LATEST}");
+                    result.Add($"{ OP.ALU +  ALU.MOVE} {ADDRESSES.JB_LATEST} 0 { ADDRESSES.JB_RAM_ADDRESS}{Comment("Move the value from the latest jump-back-register to the jump-back-ram-address-register")}");
+                    result.Add($"{OP.ALU + ALU.ADD + OP.IMMEDIATE1} {ADDRESSES.JB_LATEST} 1 {ADDRESSES.JB_LATEST}{Comment("Add 1 to the latest jump-back-address")}");
 
 
                     // +3 for 3 extra actions before actually jumping to definition
-                    result.Add($"{(int) KEYWORDS.OP_ALU + (int) KEYWORDS.ALU_MOVE + (int) KEYWORDS.OP_IMMEDIATE0} {(result.Count + 4) * 4} 0 {(int) ADDRESSES.JB_RAM}"); //jump-back address
-                    result.Add($"{(int)KEYWORDS.OP_ALU + (int)KEYWORDS.ALU_MOVE + (int)KEYWORDS.OP_IMMEDIATE0} {definition.StartInstruction} 0 {(int) ADDRESSES.JUMP_ADDRESS}");
-                    result.Add($"{(int) KEYWORDS.OP_CONDITIONS + (int) KEYWORDS.CONDITIONS_ALLWAYS} 0 0 0");
+                    result.Add($"{ OP.ALU +  ALU.MOVE +  OP.IMMEDIATE0} {(result.Count + 3) * 4} 0 { ADDRESSES.JB_RAM}{Comment("Add the jump back instruction number to the jump-back-ram")}"); //jump-back address
+                    result.Add($"{OP.ALU + ALU.MOVE + OP.IMMEDIATE0} {definition.StartInstruction} 0 { ADDRESSES.CLOCK}{Comment("Jump to the start of the definition")}");
 
 
                     // put current instruction in register 3 for jump back
