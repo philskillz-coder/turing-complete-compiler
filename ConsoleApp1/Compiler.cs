@@ -20,7 +20,6 @@ internal class Compiler
     private readonly ConditionManager conditionManager = new ConditionManager();
     private readonly LoopManager loopManager = new LoopManager();
 
-    private readonly string code;
     private readonly List<string> final = new List<string>();
 
     private bool inDefinition = false;
@@ -34,13 +33,11 @@ internal class Compiler
 
 
 
-    public Compiler(string code, bool do_comments, string comment_prefix, bool add_instruction_numbers)
+    public Compiler(bool do_comments, string comment_prefix, bool add_instruction_numbers)
     {
-        this.code = code;
         this.do_comments = do_comments;
         this.comment_prefix = comment_prefix;
         this.add_instruction_numbers = add_instruction_numbers;
-        Process();
     }
 
     private string Comment(string text)
@@ -1154,7 +1151,7 @@ internal class Compiler
         return result;
     }
 
-    public string Process()
+    public string[] Process(string code)
     {
         string[] lines = code.Split("\n");
 
@@ -1174,7 +1171,7 @@ internal class Compiler
             }
         }
 
-        return string.Join("\n", final);
+        return final.ToArray();
     }
 
 
