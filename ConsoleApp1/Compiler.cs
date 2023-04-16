@@ -14,16 +14,19 @@ namespace compiler;
 internal class Compiler
 {
 
-    private readonly ScopeManager scopeManager = new ScopeManager(new Scope("global"));
+    private readonly ScopeManager scopeManager = new ScopeManager(new Scope("global", null));
     private readonly DefinitionManager definitionManager = new DefinitionManager();
     private readonly MemoryManager memoryManager = new MemoryManager();
+    private readonly ConditionManager conditionManager = new ConditionManager();
+    private readonly LoopManager loopManager = new LoopManager();
 
     private readonly string code;
-    private readonly List<String> result = new List<string>();
+    private readonly List<string> final = new List<string>();
 
     private bool inDefinition = false;
     private int line = 0;
-    private int callDepth = 0;
+    private bool openIf = false;
+    private bool openWhile = false;
 
     private readonly bool do_comments;
     private readonly string comment_prefix;
@@ -46,18 +49,28 @@ internal class Compiler
     }
     private string Instruction_Number()
     {
-        int c = result.Count()*4;
+        int c = final.Count()*4;
         return add_instruction_numbers ? $"[{c}, {c+1}, {c+2}, {c+3}]" : "";
     }
 
-    private void ProcessLine(string line)
+    private List<string> ProcessLine(string line, bool in_if, bool in_while)
     {
+        List<string> result = new List<string>();
         line = line.Trim();
         string[] keywords = line.Split(" ");
         switch (keywords[0].Trim())
         {
+            // todo: DEL keyword
             case "SET":
                 {
+                    if (in_if)
+                    {
+                        throw new Exception("Can't do this in if condition!");
+                    }
+                    if (in_while)
+                    {
+                        throw new Exception("Can't do this in while loop!");
+                    }
                     // $VAR variable
                     // $ADDR address
                     // 0123 normal
@@ -93,9 +106,12 @@ internal class Compiler
                                 throw new Exception("No memory available");
                             }
                             destinationAddress = _sourceAddress.Value;
+                            scopeManager.currentScope.SetVariable(destination.Substring(1), destinationAddress);
+                        } else
+                        {
+                            scopeManager.currentScope.ResolveVarName(destination.Substring(1), out destinationAddress);
                         }
                         
-                        scopeManager.currentScope.SetVariable(destination.Substring(1), destinationAddress);
                     }
                     else // no correct variable name
                     {
@@ -109,61 +125,15 @@ internal class Compiler
 
             case "ADD":
                 {
-                    var _address0 = keywords[1].Trim();
-                    var _address1 = keywords[2].Trim();
-                    var _resultAddress = keywords[3].Trim();
-
-                    // get value for variable
-                    if (!scopeManager.currentScope.ResolveAddress(_address0, out int address0, out bool address0Immediate))
+                    if (in_if)
                     {
-                        throw new Exception("Memory address could not be resolved");
+                        throw new Exception("Can't do this in if condition!");
+                    }
+                    if (in_while)
+                    {
+                        throw new Exception("Can't do this in while loop!");
                     }
 
-                    // get value for variable
-                    if (!scopeManager.currentScope.ResolveAddress(_address1, out int address1, out bool address1Immediate))
-                    {
-                        throw new Exception("Memory address could not be resolved");
-                    }
-
-                    // get value for variable
-                    if (!scopeManager.currentScope.ResolveAddress(_resultAddress, out int resultAddress, out bool resultImmediate) || resultImmediate)
-                    {
-                        throw new Exception("Memory address could not be resolved");
-                    }
-
-                    if (!address0Immediate && !address1Immediate) // both in ram
-                    {
-                        // todo: use register addresses
-                        result.Add($"{ALU.MOVE + OP.IMMEDIATE0} {address0} 0 { ADDRESSES.RAM_ADDRESS}{Comment("Move first address to ram-address-register")}"); // move first address to ram read
-                        result.Add($"{ALU.MOVE} 0 0 { ADDRESSES.RAM_TEMP_0}{Comment("Move first value to ram-temp-0")}");
-                        result.Add($"{ALU.MOVE + OP.IMMEDIATE0} {address1} 0 { ADDRESSES.RAM_ADDRESS}{Comment("Move second address to ram-address-register")}"); // move second address to ram read
-                        result.Add($"{ALU.MOVE} 0 0 { ADDRESSES.RAM_TEMP_1}{Comment("Move second value to ram-temp-1")}");
-                        result.Add($"{ALU.MOVE + OP.IMMEDIATE0} {resultAddress} 0 {ADDRESSES.RAM_ADDRESS}{Comment("Move result address to ram-address-register")}"); // move result address to ram write
-                        result.Add($"{ALU.ADD} { ADDRESSES.RAM_TEMP_0} { ADDRESSES.RAM_TEMP_1} { ADDRESSES.RAM}{Comment("Add values from ram-temp-0 and -1 and move result to ram")}");
-                    }
-
-                    if (address1Immediate)
-                    {
-                        result.Add($"{ALU.MOVE + OP.IMMEDIATE0} {address0} 0 {ADDRESSES.RAM_ADDRESS}{Comment("Move first address to ram-address-register")}"); // move first address to ram read
-                        result.Add($"{ALU.MOVE} 0 0 {ADDRESSES.RAM_TEMP_0}{Comment("Move first value to ram-temp-0")}");
-
-                        result.Add($"{ALU.MOVE + OP.IMMEDIATE0} {resultAddress} 0 {ADDRESSES.RAM_ADDRESS}{Comment("Move result address to ram-address-register")}"); // move result address to ram write
-                        result.Add($"{ALU.ADD + OP.IMMEDIATE1} {ADDRESSES.RAM_TEMP_0} {address1} {ADDRESSES.RAM}{Comment("Add value from ram-temp-0 and immediate-value-1 and move result to ram")}");
-                    }
-
-                    if (address0Immediate)
-                    {
-                        result.Add($"{ALU.MOVE + OP.IMMEDIATE0} {address1} 0 {ADDRESSES.RAM_ADDRESS}{Comment("Move second address to ram-address-register")}"); // move second address to ram read
-                        result.Add($"{ALU.MOVE} 0 0 {ADDRESSES.RAM_TEMP_0}{Comment("Move second value to ram-temp-0")}");
-
-                        result.Add($"{ALU.MOVE + OP.IMMEDIATE0} {resultAddress} 0 {ADDRESSES.RAM_ADDRESS}{Comment("Move result address to ram-address-register")}"); // move result address to ram write
-                        result.Add($"{ALU.ADD + OP.IMMEDIATE0} {address0} {ADDRESSES.RAM_TEMP_0} {ADDRESSES.RAM}{Comment("Add immediate-value-0 and value from ram-temp-0 and move result to ram")}");
-                    }
-                    break;
-                }
-
-            case "SUB":
-                {
                     var _address0 = keywords[1].Trim();
                     var _address1 = keywords[2].Trim();
                     var _resultAddress = keywords[3].Trim();
@@ -194,41 +164,122 @@ internal class Compiler
                         result.Add($"{ALU.MOVE + OP.IMMEDIATE0} {address1} 0 {ADDRESSES.RAM_ADDRESS}{Comment("Move second address to ram-address-register")}"); // move second address to ram read
                         result.Add($"{ALU.MOVE} 0 0 {ADDRESSES.RAM_TEMP_1}{Comment("Move second value to ram-temp-1")}");
                         result.Add($"{ALU.MOVE + OP.IMMEDIATE0} {resultAddress} 0 {ADDRESSES.RAM_ADDRESS}{Comment("Move result address to ram-address-register")}"); // move result address to ram write
-                        result.Add($"{ALU.SUBTRACT} {ADDRESSES.RAM_TEMP_0} {ADDRESSES.RAM_TEMP_1} {ADDRESSES.RAM}{Comment("Add values from ram-temp-0 and -1 and move result to ram")}");
+                        result.Add($"{ALU.ADD} {ADDRESSES.RAM_TEMP_0} {ADDRESSES.RAM_TEMP_1} {ADDRESSES.RAM}{Comment("Add values from ram-temp-0 and -1 and move result to ram")}");
                     }
-
-                    if (address1Immediate)
-                    {
-                        result.Add($"{ALU.MOVE + OP.IMMEDIATE0} {address0} 0 {ADDRESSES.RAM_ADDRESS}{Comment("Move first address to ram-address-register")}"); // move first address to ram read
-                        result.Add($"{ALU.MOVE} 0 0 {ADDRESSES.RAM_TEMP_0}{Comment("Move first value to ram-temp-0")}");
-
-                        result.Add($"{ALU.MOVE + OP.IMMEDIATE0} {resultAddress} 0 {ADDRESSES.RAM_ADDRESS}{Comment("Move result address to ram-address-register")}"); // move result address to ram write
-                        result.Add($"{ALU.SUBTRACT + OP.IMMEDIATE1} {ADDRESSES.RAM_TEMP_0} {address1} {ADDRESSES.RAM}{Comment("Add value from ram-temp-0 and immediate-value-1 and move result to ram")}");
-                    }
-
-                    if (address0Immediate)
+                    else if (!address1Immediate)
                     {
                         result.Add($"{ALU.MOVE + OP.IMMEDIATE0} {address1} 0 {ADDRESSES.RAM_ADDRESS}{Comment("Move second address to ram-address-register")}"); // move second address to ram read
                         result.Add($"{ALU.MOVE} 0 0 {ADDRESSES.RAM_TEMP_0}{Comment("Move second value to ram-temp-0")}");
 
                         result.Add($"{ALU.MOVE + OP.IMMEDIATE0} {resultAddress} 0 {ADDRESSES.RAM_ADDRESS}{Comment("Move result address to ram-address-register")}"); // move result address to ram write
-                        result.Add($"{ALU.SUBTRACT + OP.IMMEDIATE0} {address0} {ADDRESSES.RAM_TEMP_0} {ADDRESSES.RAM}{Comment("Add immediate-value-0 and value from ram-temp-0 and move result to ram")}");
+                        result.Add($"{ALU.ADD + OP.IMMEDIATE0} {address0} {ADDRESSES.RAM_TEMP_0} {ADDRESSES.RAM}{Comment("Add immediate-value-0 and value from ram-temp-0 and move result to ram")}");
+                    }
+                    else if (!address0Immediate)
+                    {
+                        result.Add($"{ALU.MOVE + OP.IMMEDIATE0} {address0} 0 {ADDRESSES.RAM_ADDRESS}{Comment("Move first address to ram-address-register")}"); // move first address to ram read
+                        result.Add($"{ALU.MOVE} 0 0 {ADDRESSES.RAM_TEMP_0}{Comment("Move first value to ram-temp-0")}");
+
+                        result.Add($"{ALU.MOVE + OP.IMMEDIATE0} {resultAddress} 0 {ADDRESSES.RAM_ADDRESS}{Comment("Move result address to ram-address-register")}"); // move result address to ram write
+                        result.Add($"{ALU.ADD + OP.IMMEDIATE1} {ADDRESSES.RAM_TEMP_0} {address1} {ADDRESSES.RAM}{Comment("Add value from ram-temp-0 and immediate-value-1 and move result to ram")}");
+
+                    }
+                    else
+                    {
+                        result.Add($"{ALU.MOVE + OP.IMMEDIATE0} {resultAddress} 0 {ADDRESSES.RAM_ADDRESS}{Comment("Move result address to ram-address-register")}"); // move result address to ram write
+                        result.Add($"{ALU.ADD + OP.IMMEDIATE0 + OP.IMMEDIATE1} {address0} {address1} {ADDRESSES.RAM}{Comment("Add immediate-value-0 and immediate-value-1 and move result to ram")}");
+                    }
+                    break;
+                }
+
+            case "SUB":
+                {
+                    if (in_if)
+                    {
+                        throw new Exception("Can't do this in if condition!");
+                    }
+                    if (in_while)
+                    {
+                        throw new Exception("Can't do this in while loop!");
+                    }
+
+                    var _address0 = keywords[1].Trim();
+                    var _address1 = keywords[2].Trim();
+                    var _resultAddress = keywords[3].Trim();
+
+                    // get value for variable
+                    if (!scopeManager.currentScope.ResolveAddress(_address0, out int address0, out bool address0Immediate))
+                    {
+                        throw new Exception("Memory address could not be resolved");
+                    }
+
+                    // get value for variable
+                    if (!scopeManager.currentScope.ResolveAddress(_address1, out int address1, out bool address1Immediate))
+                    {
+                        throw new Exception("Memory address could not be resolved");
+                    }
+
+                    // get value for variable
+                    if (!scopeManager.currentScope.ResolveAddress(_resultAddress, out int resultAddress, out bool resultImmediate) || resultImmediate)
+                    {
+                        throw new Exception("Memory address could not be resolved");
+                    }
+
+                    if (!address0Immediate && !address1Immediate) // both in ram
+                    {
+                        // todo: use register addresses
+                        result.Add($"{ALU.MOVE + OP.IMMEDIATE0} {address0} 0 {ADDRESSES.RAM_ADDRESS}{Comment("Move first address to ram-address-register")}"); // move first address to ram read
+                        result.Add($"{ALU.MOVE} 0 0 {ADDRESSES.RAM_TEMP_0}{Comment("Move first value to ram-temp-0")}");
+                        result.Add($"{ALU.MOVE + OP.IMMEDIATE0} {address1} 0 {ADDRESSES.RAM_ADDRESS}{Comment("Move second address to ram-address-register")}"); // move second address to ram read
+                        result.Add($"{ALU.MOVE} 0 0 {ADDRESSES.RAM_TEMP_1}{Comment("Move second value to ram-temp-1")}");
+                        result.Add($"{ALU.MOVE + OP.IMMEDIATE0} {resultAddress} 0 {ADDRESSES.RAM_ADDRESS}{Comment("Move result address to ram-address-register")}"); // move result address to ram write
+                        result.Add($"{ALU.SUBTRACT} {ADDRESSES.RAM_TEMP_0} {ADDRESSES.RAM_TEMP_1} {ADDRESSES.RAM}{Comment("Subtract value from ram-temp-0 from ram-temp-1 and move result to ram")}");
+                    } 
+                    else if (!address1Immediate)
+                    {
+                        result.Add($"{ALU.MOVE + OP.IMMEDIATE0} {address1} 0 {ADDRESSES.RAM_ADDRESS}{Comment("Move second address to ram-address-register")}"); // move second address to ram read
+                        result.Add($"{ALU.MOVE} 0 0 {ADDRESSES.RAM_TEMP_0}{Comment("Move second value to ram-temp-0")}");
+
+                        result.Add($"{ALU.MOVE + OP.IMMEDIATE0} {resultAddress} 0 {ADDRESSES.RAM_ADDRESS}{Comment("Move result address to ram-address-register")}"); // move result address to ram write
+                        result.Add($"{ALU.SUBTRACT + OP.IMMEDIATE0} {address0} {ADDRESSES.RAM_TEMP_0} {ADDRESSES.RAM}{Comment("Subract immediate-value-0 from value from ram-temp-0 and move result to ram")}");
+                    }
+                    else if (!address0Immediate)
+                    {
+                        result.Add($"{ALU.MOVE + OP.IMMEDIATE0} {address0} 0 {ADDRESSES.RAM_ADDRESS}{Comment("Move first address to ram-address-register")}"); // move first address to ram read
+                        result.Add($"{ALU.MOVE} 0 0 {ADDRESSES.RAM_TEMP_0}{Comment("Move first value to ram-temp-0")}");
+
+                        result.Add($"{ALU.MOVE + OP.IMMEDIATE0} {resultAddress} 0 {ADDRESSES.RAM_ADDRESS}{Comment("Move result address to ram-address-register")}"); // move result address to ram write
+                        result.Add($"{ALU.SUBTRACT + OP.IMMEDIATE1} {ADDRESSES.RAM_TEMP_0} {address1} {ADDRESSES.RAM}{Comment("Subtract value from ram-temp-0 from immediate-value-1 and move result to ram")}");
+
+
+                    } else
+                    {
+                        result.Add($"{ALU.MOVE + OP.IMMEDIATE0} {resultAddress} 0 {ADDRESSES.RAM_ADDRESS}{Comment("Move result address to ram-address-register")}"); // move result address to ram write
+                        result.Add($"{ALU.SUBTRACT + OP.IMMEDIATE0 + OP.IMMEDIATE1} {address0} {address1} {ADDRESSES.RAM}{Comment("Subtract immediate-value-0 from immediate-value-1 and move result to ram")}");
                     }
                     break;
                 }
 
             case "DEF":
                 {
+                    if (in_if)
+                    {
+                        throw new Exception("Can't do this in if condition!");
+                    }
+                    if (in_while)
+                    {
+                        throw new Exception("Can't do this in while loop!");
+                    }
+
                     string name = keywords[1].Trim();
-                    int currentPosition = (result.Count+1) * 4;
+                    int currentPosition = (final.Count+1) * 4;
                     inDefinition = true;
 
-                    if (!definitionManager.CreateDefinition(name, currentPosition, result.Count, out Definition? definition) || definition == null)
+                    if (!definitionManager.CreateDefinition(name, currentPosition, final.Count, out Definition? definition) || definition == null)
                     {
                         throw new Exception("A definition with this name already exists");
                     }
 
-                    if (!scopeManager.CreateScope("definition." + name, out Scope? scope) || scope == null)
+                    if (!scopeManager.CreateScope("definition." + name, scopeManager.currentScope, out Scope? scope) || scope == null)
                     {
                         throw new Exception("Scope error");
                     }
@@ -241,6 +292,15 @@ internal class Compiler
 
             case "ENDDEF":
                 {
+                    if (in_if)
+                    {
+                        throw new Exception("Can't do this in if condition!");
+                    }
+                    if (in_while)
+                    {
+                        throw new Exception("Can't do this in while loop!");
+                    }
+
                     if (!inDefinition)
                     {
                         throw new Exception("Not in a definition");
@@ -249,12 +309,12 @@ internal class Compiler
                     inDefinition = false;
 
                     // +6 for 6 extra actions
-                    int currentPosition = (result.Count+4) * 4;
+                    int currentPosition = (final.Count+4) * 4;
                     Definition definition = definitionManager.LatestOpenCodeDefinition();
                     definitionManager.CloseLatestOpenCodeDefinition();
 
                     // inject a jump-to reference before the definition start to jump to the instruction where the definition ends
-                    result.Insert(definition.ResultStartIndex, $"{ OP.ALU +  ALU.MOVE +  OP.IMMEDIATE0} {currentPosition} 0 { ADDRESSES.CLOCK}{Comment("Jump to the end of the definition")}");
+                    final.Insert(definition.ResultStartIndex, $"{ OP.ALU +  ALU.MOVE +  OP.IMMEDIATE0} {currentPosition} 0 { ADDRESSES.CLOCK}{Comment("Jump to the end of the definition")}");
 
                     // jump-back to origin
                     result.Add($"{ OP.ALU + ALU.SUBTRACT + OP.IMMEDIATE1} { ADDRESSES.JB_LATEST} 1 { ADDRESSES.JB_LATEST}{Comment("Subtract 1 from the latest jump-back-address")}");
@@ -267,6 +327,15 @@ internal class Compiler
 
             case "CALL":
                 {
+                    if (in_if)
+                    {
+                        throw new Exception("Can't do this in if condition!");
+                    }
+                    if (in_while)
+                    {
+                        throw new Exception("Can't do this in while loop!");
+                    }
+
                     string name = keywords[1].Trim();
 
                     if (!definitionManager.ResolveDefinition(name, out Definition? definition) || definition == null)
@@ -279,7 +348,8 @@ internal class Compiler
 
 
                     // +3 for 3 extra actions before actually jumping to definition
-                    result.Add($"{ OP.ALU +  ALU.MOVE +  OP.IMMEDIATE0} {(result.Count + 3) * 4} 0 { ADDRESSES.JB_RAM}{Comment("Add the jump back instruction number to the jump-back-ram")}"); //jump-back address
+                    // +2 for 2 actions before in the code ( because result has not been added to final -> final.Count is 2 less than it should be)
+                    result.Add($"{ OP.ALU +  ALU.MOVE +  OP.IMMEDIATE0} {(final.Count + 3 + 2) * 4} 0 { ADDRESSES.JB_RAM}{Comment("Add the jump back instruction number to the jump-back-ram")}"); //jump-back address
                     result.Add($"{OP.ALU + ALU.MOVE + OP.IMMEDIATE0} {definition.StartInstruction} 0 { ADDRESSES.CLOCK}{Comment("Jump to the start of the definition")}");
 
 
@@ -287,7 +357,801 @@ internal class Compiler
                     // define a jump-back register which holds the instruction which to jump back after finishing the call
                     break;
                 }
+
+            case "IF":
+                {
+                    if (in_if)
+                    {
+                        throw new Exception("Can't do this in if condition!");
+                    }
+                    if (in_while)
+                    {
+                        throw new Exception("Can't do this in while loop!");
+                    }
+                    openIf = true;
+
+                    string conditionCode = string.Join(" ", keywords.Skip(1).ToList());
+                    List<string> ifInstructions = ProcessLine(conditionCode, in_if: true, in_while: false);
+                    int currentPosition = (final.Count + ifInstructions.Count() + 2) * 4;
+                    
+                    foreach (var item in ifInstructions)
+                    {
+                        result.Add(item + $"{currentPosition}");
+                    }
+
+                    conditionManager.CreateCondition(currentPosition, final.Count+ifInstructions.Count(), out Condition? condition);
+
+                    conditionManager.AddOpenCodeCondition(condition);
+
+                    break;
+                }
+            case "ENDIF":
+                {
+                    if (in_if)
+                    {
+                        throw new Exception("Can't do this in if condition!");
+                    }
+                    if (in_while)
+                    {
+                        throw new Exception("Can't do this in while loop!");
+                    }
+
+                    if (!openIf)
+                    {
+                        throw new Exception("Not in a condition");
+                    }
+
+                    openIf = false;
+
+                    // +1 for 1 extra action
+                    int currentPosition = (final.Count + 2) * 4;
+                    Condition condition = conditionManager.LatestOpenCodeCondition();
+                    conditionManager.CloseLatestOpenCodeCondition();
+
+                    // inject a jump-to reference before the definition start to jump to the instruction where the definition ends
+                    final.Insert(condition.ResultStartIndex, $"{OP.ALU + ALU.MOVE + OP.IMMEDIATE0} {currentPosition} 0 {ADDRESSES.CLOCK}{Comment("Jump to the end of the condition")}");
+
+                    break;
+                }
+
+            case "WHILE":
+                {
+                    if (in_if)
+                    {
+                        throw new Exception("Can't do this in if condition!");
+                    }
+                    if (in_while)
+                    {
+                        throw new Exception("Can't do this in while loop!");
+                    }
+
+                    openWhile = true;
+
+                    string conditionCode = string.Join(" ", keywords.Skip(1).ToList());
+                    List<string> whileInstructions = ProcessLine(conditionCode, in_if: false, in_while: true);
+                    int currentPosition = (final.Count + 1) * 4;
+
+                    foreach (var item in whileInstructions)
+                    {
+                        // +1 to skip the "jump-to-end" instruction
+                        result.Add(item + $"{(final.Count() + whileInstructions.Count() + 1) * 4}");
+                    }
+
+                    loopManager.CreateLoop(currentPosition, final.Count + whileInstructions.Count(), out Loop? loop);
+
+                    loopManager.AddOpenCodeLoop(loop);
+
+                    break;
+                }
+            case "ENDWHILE":
+                {
+                    if (in_if)
+                    {
+                        throw new Exception("Can't do this in if condition!");
+                    }
+
+                    if (in_while)
+                    {
+                        throw new Exception("Can't do this in if condition!");
+                    }
+                    if (!openWhile)
+                    {
+                        throw new Exception("Not in a while loop");
+                    }
+
+                    openWhile = false;
+
+                    // +1 for 1 extra action
+                    int currentPosition = (final.Count + 2) * 4;
+                    Loop loop = loopManager.LatestOpenCodeLoop();
+                    loopManager.CloseLatestOpenCodeLoop();
+
+                    // inject a jump-to reference to the start of the loop
+                    final.Add($"{OP.ALU + ALU.MOVE + OP.IMMEDIATE0} {loop.StartInstruction} 0 {ADDRESSES.CLOCK}{Comment("Jump to the start of the loop")}");
+
+                    // inject a jump-to reference before the definition start to jump to the instruction where the definition ends if the condition is false
+                    final.Insert(loop.ResultIndex, $"{OP.ALU + ALU.MOVE + OP.IMMEDIATE0} {currentPosition} 0 {ADDRESSES.CLOCK}{Comment("Jump to the end of the loop")}");
+
+                    break;
+                }
+
+
+            // conditions 
+            case "EQ":
+                {
+                    // Code for EQUAL case
+                    if (in_if || in_while)
+                    {
+                        var _address0 = keywords[1].Trim();
+                        var _address1 = keywords[2].Trim();
+
+                        // get value for variable
+                        if (!scopeManager.currentScope.ResolveAddress(_address0, out int address0, out bool address0Immediate))
+                        {
+                            throw new Exception("Memory address could not be resolved");
+                        }
+
+                        // get value for variable
+                        if (!scopeManager.currentScope.ResolveAddress(_address1, out int address1, out bool address1Immediate))
+                        {
+                            throw new Exception("Memory address could not be resolved");
+                        }
+
+                        if (!address0Immediate && !address1Immediate)
+                        {
+                            result.Add($"{ALU.MOVE + OP.IMMEDIATE0} {address0} 0 {ADDRESSES.RAM_ADDRESS}{Comment("Move first address to ram-address-register")}"); // move first address to ram read
+                            result.Add($"{ALU.MOVE} 0 0 {ADDRESSES.RAM_TEMP_0}{Comment("Move first value to ram-temp-0")}");
+                            result.Add($"{ALU.MOVE + OP.IMMEDIATE0} {address1} 0 {ADDRESSES.RAM_ADDRESS}{Comment("Move second address to ram-address-register")}"); // move second address to ram read
+                            result.Add($"{ALU.MOVE} 0 0 {ADDRESSES.RAM_TEMP_1}{Comment("Move second value to ram-temp-1")}");
+
+                            result.Add($"{OP.CONDITIONS + CONDITIONS.EQUAL + CONDITIONS.JUMP_IF_RESULT} {ADDRESSES.RAM_TEMP_0} {ADDRESSES.RAM_TEMP_1} ");
+                        }
+                        else if (!address1Immediate)
+                        {
+                            result.Add($"{ALU.MOVE + OP.IMMEDIATE0} {address0} 0 {ADDRESSES.RAM_ADDRESS}{Comment("Move first address to ram-address-register")}"); // move first address to ram read
+                            result.Add($"{ALU.MOVE} 0 0 {ADDRESSES.RAM_TEMP_0}{Comment("Move first value to ram-temp-0")}");
+
+                            result.Add($"{OP.CONDITIONS + CONDITIONS.EQUAL + CONDITIONS.JUMP_IF_RESULT + OP.IMMEDIATE1} {ADDRESSES.RAM_TEMP_0} {address1} ");
+                        }
+                        else if (!address0Immediate)
+                        {
+                            result.Add($"{ALU.MOVE + OP.IMMEDIATE0} {address1} 0 {ADDRESSES.RAM_ADDRESS}{Comment("Move second address to ram-address-register")}"); // move first address to ram read
+                            result.Add($"{ALU.MOVE} 0 0 {ADDRESSES.RAM_TEMP_0}{Comment("Move second value to ram-temp-0")}");
+
+                            result.Add($"{OP.CONDITIONS + CONDITIONS.EQUAL + CONDITIONS.JUMP_IF_RESULT + OP.IMMEDIATE0} {address0} {ADDRESSES.RAM_TEMP_0} ");
+                        }
+                        else
+                        {
+                            result.Add($"{OP.CONDITIONS + CONDITIONS.EQUAL + CONDITIONS.JUMP_IF_RESULT + OP.IMMEDIATE0 + OP.IMMEDIATE1} {address0} {address1} ");
+                        }
+
+                    } else
+                    {
+                        var _address0 = keywords[1].Trim();
+                        var _address1 = keywords[2].Trim();
+                        var _resultAddress = keywords[3].Trim();
+
+                        // get value for variable
+                        if (!scopeManager.currentScope.ResolveAddress(_address0, out int address0, out bool address0Immediate))
+                        {
+                            throw new Exception("Memory address could not be resolved");
+                        }
+
+                        // get value for variable
+                        if (!scopeManager.currentScope.ResolveAddress(_address1, out int address1, out bool address1Immediate))
+                        {
+                            throw new Exception("Memory address could not be resolved");
+                        }
+
+                        if (!scopeManager.currentScope.ResolveAddress(_resultAddress, out int resultAddress, out bool resultImmediate) || resultImmediate)
+                        {
+                            throw new Exception("Memory address could not be resolved");
+                        }
+
+                        if (!address0Immediate && !address1Immediate)
+                        {
+                            result.Add($"{ALU.MOVE + OP.IMMEDIATE0} {address0} 0 {ADDRESSES.RAM_ADDRESS}{Comment("Move first address to ram-address-register")}"); // move first address to ram read
+                            result.Add($"{ALU.MOVE} 0 0 {ADDRESSES.RAM_TEMP_0}{Comment("Move first value to ram-temp-0")}");
+                            result.Add($"{ALU.MOVE + OP.IMMEDIATE0} {address1} 0 {ADDRESSES.RAM_ADDRESS}{Comment("Move second address to ram-address-register")}"); // move second address to ram read
+                            result.Add($"{ALU.MOVE} 0 0 {ADDRESSES.RAM_TEMP_1}{Comment("Move second value to ram-temp-1")}");
+
+                            result.Add($"{ALU.MOVE + OP.IMMEDIATE0} {resultAddress} 0 {ADDRESSES.RAM_ADDRESS}{Comment("Move result address to ram-address-register")}");
+                            result.Add($"{OP.CONDITIONS + CONDITIONS.EQUAL + CONDITIONS.JUMP_IF_RESULT} {ADDRESSES.RAM_TEMP_0} {ADDRESSES.RAM_TEMP_1} {ADDRESSES.RAM}");
+                        }
+                        else if (!address1Immediate)
+                        {
+                            result.Add($"{ALU.MOVE + OP.IMMEDIATE0} {address0} 0 {ADDRESSES.RAM_ADDRESS}{Comment("Move first address to ram-address-register")}"); // move first address to ram read
+                            result.Add($"{ALU.MOVE} 0 0 {ADDRESSES.RAM_TEMP_0}{Comment("Move first value to ram-temp-0")}");
+
+                            result.Add($"{ALU.MOVE + OP.IMMEDIATE0} {resultAddress} 0 {ADDRESSES.RAM_ADDRESS}{Comment("Move result address to ram-address-register")}");
+                            result.Add($"{OP.CONDITIONS + CONDITIONS.EQUAL + CONDITIONS.JUMP_IF_RESULT + OP.IMMEDIATE1} {ADDRESSES.RAM_TEMP_0} {address1} {ADDRESSES.RAM}");
+                        }
+                        else if (!address0Immediate)
+                        {
+                            result.Add($"{ALU.MOVE + OP.IMMEDIATE0} {address1} 0 {ADDRESSES.RAM_ADDRESS}{Comment("Move second address to ram-address-register")}"); // move first address to ram read
+                            result.Add($"{ALU.MOVE} 0 0 {ADDRESSES.RAM_TEMP_0}{Comment("Move second value to ram-temp-0")}");
+
+                            result.Add($"{ALU.MOVE + OP.IMMEDIATE0} {resultAddress} 0 {ADDRESSES.RAM_ADDRESS}{Comment("Move result address to ram-address-register")}");
+                            result.Add($"{OP.CONDITIONS + CONDITIONS.EQUAL + CONDITIONS.JUMP_IF_RESULT + OP.IMMEDIATE0} {address0} {ADDRESSES.RAM_TEMP_0} {ADDRESSES.RAM}");
+
+                        } else
+                        {
+                            result.Add($"{ALU.MOVE + OP.IMMEDIATE0} {resultAddress} 0 {ADDRESSES.RAM_ADDRESS}{Comment("Move result address to ram-address-register")}");
+                            result.Add($"{OP.CONDITIONS + CONDITIONS.EQUAL + OP.IMMEDIATE0 + OP.IMMEDIATE1} {address0} {address1} {ADDRESSES.RAM}");
+                        }
+                    }
+                    break;
+                }
+            case "NEQ":
+                {
+                    // Code for NOTEQUAL case
+                    if (in_if || in_while)
+                    {
+                        var _address0 = keywords[1].Trim();
+                        var _address1 = keywords[2].Trim();
+
+                        // get value for variable
+                        if (!scopeManager.currentScope.ResolveAddress(_address0, out int address0, out bool address0Immediate))
+                        {
+                            throw new Exception("Memory address could not be resolved");
+                        }
+
+                        // get value for variable
+                        if (!scopeManager.currentScope.ResolveAddress(_address1, out int address1, out bool address1Immediate))
+                        {
+                            throw new Exception("Memory address could not be resolved");
+                        }
+
+                        if (!address0Immediate && !address1Immediate)
+                        {
+                            result.Add($"{ALU.MOVE + OP.IMMEDIATE0} {address0} 0 {ADDRESSES.RAM_ADDRESS}{Comment("Move first address to ram-address-register")}"); // move first address to ram read
+                            result.Add($"{ALU.MOVE} 0 0 {ADDRESSES.RAM_TEMP_0}{Comment("Move first value to ram-temp-0")}");
+                            result.Add($"{ALU.MOVE + OP.IMMEDIATE0} {address1} 0 {ADDRESSES.RAM_ADDRESS}{Comment("Move second address to ram-address-register")}"); // move second address to ram read
+                            result.Add($"{ALU.MOVE} 0 0 {ADDRESSES.RAM_TEMP_1}{Comment("Move second value to ram-temp-1")}");
+
+                            result.Add($"{OP.CONDITIONS + CONDITIONS.NOTEQUAL + CONDITIONS.JUMP_IF_RESULT} {ADDRESSES.RAM_TEMP_0} {ADDRESSES.RAM_TEMP_1} ");
+                        }
+                        else if (!address1Immediate)
+                        {
+                            result.Add($"{ALU.MOVE + OP.IMMEDIATE0} {address1} 0 {ADDRESSES.RAM_ADDRESS}{Comment("Move second address to ram-address-register")}"); // move first address to ram read
+                            result.Add($"{ALU.MOVE} 0 0 {ADDRESSES.RAM_TEMP_0}{Comment("Move second value to ram-temp-0")}");
+
+                            result.Add($"{OP.CONDITIONS + CONDITIONS.NOTEQUAL + CONDITIONS.JUMP_IF_RESULT + OP.IMMEDIATE0} {address0} {ADDRESSES.RAM_TEMP_0} ");
+                        }
+                        else if (!address0Immediate)
+                        {
+                            result.Add($"{ALU.MOVE + OP.IMMEDIATE0} {address0} 0 {ADDRESSES.RAM_ADDRESS}{Comment("Move first address to ram-address-register")}"); // move first address to ram read
+                            result.Add($"{ALU.MOVE} 0 0 {ADDRESSES.RAM_TEMP_0}{Comment("Move first value to ram-temp-0")}");
+
+                            result.Add($"{OP.CONDITIONS + CONDITIONS.NOTEQUAL + CONDITIONS.JUMP_IF_RESULT + OP.IMMEDIATE1} {ADDRESSES.RAM_TEMP_0} {address1} ");
+                        }
+                        else
+                        {
+                            result.Add($"{OP.CONDITIONS + CONDITIONS.NOTEQUAL + CONDITIONS.JUMP_IF_RESULT + OP.IMMEDIATE0 + OP.IMMEDIATE1} {address0} {address1} ");
+                        }
+                    }
+                    else
+                    {
+                        var _address0 = keywords[1].Trim();
+                        var _address1 = keywords[2].Trim();
+                        var _resultAddress = keywords[3].Trim();
+
+                        // get value for variable
+                        if (!scopeManager.currentScope.ResolveAddress(_address0, out int address0, out bool address0Immediate))
+                        {
+                            throw new Exception("Memory address could not be resolved");
+                        }
+
+                        // get value for variable
+                        if (!scopeManager.currentScope.ResolveAddress(_address1, out int address1, out bool address1Immediate))
+                        {
+                            throw new Exception("Memory address could not be resolved");
+                        }
+
+                        if (!scopeManager.currentScope.ResolveAddress(_resultAddress, out int resultAddress, out bool resultImmediate) || resultImmediate)
+                        {
+                            throw new Exception("Memory address could not be resolved");
+                        }
+
+                        if (!address0Immediate && !address1Immediate)
+                        {
+                            result.Add($"{ALU.MOVE + OP.IMMEDIATE0} {address0} 0 {ADDRESSES.RAM_ADDRESS}{Comment("Move first address to ram-address-register")}"); // move first address to ram read
+                            result.Add($"{ALU.MOVE} 0 0 {ADDRESSES.RAM_TEMP_0}{Comment("Move first value to ram-temp-0")}");
+                            result.Add($"{ALU.MOVE + OP.IMMEDIATE0} {address1} 0 {ADDRESSES.RAM_ADDRESS}{Comment("Move second address to ram-address-register")}"); // move second address to ram read
+                            result.Add($"{ALU.MOVE} 0 0 {ADDRESSES.RAM_TEMP_1}{Comment("Move second value to ram-temp-1")}");
+
+                            result.Add($"{ALU.MOVE + OP.IMMEDIATE0} {resultAddress} 0 {ADDRESSES.RAM_ADDRESS}{Comment("Move result address to ram-address-register")}");
+                            result.Add($"{OP.CONDITIONS + CONDITIONS.NOTEQUAL + CONDITIONS.JUMP_IF_RESULT} {ADDRESSES.RAM_TEMP_0} {ADDRESSES.RAM_TEMP_1} {ADDRESSES.RAM}");
+                        }
+                        else if (!address1Immediate)
+                        {
+                            result.Add($"{ALU.MOVE + OP.IMMEDIATE0} {address1} 0 {ADDRESSES.RAM_ADDRESS}{Comment("Move second address to ram-address-register")}"); // move first address to ram read
+                            result.Add($"{ALU.MOVE} 0 0 {ADDRESSES.RAM_TEMP_0}{Comment("Move second value to ram-temp-0")}");
+
+                            result.Add($"{ALU.MOVE + OP.IMMEDIATE0} {resultAddress} 0 {ADDRESSES.RAM_ADDRESS}{Comment("Move result address to ram-address-register")}");
+                            result.Add($"{OP.CONDITIONS + CONDITIONS.NOTEQUAL + CONDITIONS.JUMP_IF_RESULT + OP.IMMEDIATE0} {address0} {ADDRESSES.RAM_TEMP_0} {ADDRESSES.RAM}");
+                        }
+                        else if (!address0Immediate)
+                        {
+                            result.Add($"{ALU.MOVE + OP.IMMEDIATE0} {address0} 0 {ADDRESSES.RAM_ADDRESS}{Comment("Move first address to ram-address-register")}"); // move first address to ram read
+                            result.Add($"{ALU.MOVE} 0 0 {ADDRESSES.RAM_TEMP_0}{Comment("Move first value to ram-temp-0")}");
+
+                            result.Add($"{ALU.MOVE + OP.IMMEDIATE0} {resultAddress} 0 {ADDRESSES.RAM_ADDRESS}{Comment("Move result address to ram-address-register")}");
+                            result.Add($"{OP.CONDITIONS + CONDITIONS.NOTEQUAL + CONDITIONS.JUMP_IF_RESULT + OP.IMMEDIATE1} {ADDRESSES.RAM_TEMP_0} {address1} {ADDRESSES.RAM}");
+                        } else
+                        {
+                            result.Add($"{ALU.MOVE + OP.IMMEDIATE0} {resultAddress} 0 {ADDRESSES.RAM_ADDRESS}{Comment("Move result address to ram-address-register")}");
+                            result.Add($"{OP.CONDITIONS + CONDITIONS.NOTEQUAL + OP.IMMEDIATE0 + OP.IMMEDIATE1} {address0} {address1} {ADDRESSES.RAM}");
+                        }
+                    }
+                    break;
+                }
+            case "SM":
+                {
+                    // Code for SMALLER case
+                    if (in_if || in_while)
+                    {
+                        var _address0 = keywords[1].Trim();
+                        var _address1 = keywords[2].Trim();
+
+                        // get value for variable
+                        if (!scopeManager.currentScope.ResolveAddress(_address0, out int address0, out bool address0Immediate))
+                        {
+                            throw new Exception("Memory address could not be resolved");
+                        }
+
+                        // get value for variable
+                        if (!scopeManager.currentScope.ResolveAddress(_address1, out int address1, out bool address1Immediate))
+                        {
+                            throw new Exception("Memory address could not be resolved");
+                        }
+
+                        if (!address0Immediate && !address1Immediate)
+                        {
+                            result.Add($"{ALU.MOVE + OP.IMMEDIATE0} {address0} 0 {ADDRESSES.RAM_ADDRESS}{Comment("Move first address to ram-address-register")}"); // move first address to ram read
+                            result.Add($"{ALU.MOVE} 0 0 {ADDRESSES.RAM_TEMP_0}{Comment("Move first value to ram-temp-0")}");
+                            result.Add($"{ALU.MOVE + OP.IMMEDIATE0} {address1} 0 {ADDRESSES.RAM_ADDRESS}{Comment("Move second address to ram-address-register")}"); // move second address to ram read
+                            result.Add($"{ALU.MOVE} 0 0 {ADDRESSES.RAM_TEMP_1}{Comment("Move second value to ram-temp-1")}");
+
+                            result.Add($"{OP.CONDITIONS + CONDITIONS.SMALLER + CONDITIONS.JUMP_IF_RESULT} {ADDRESSES.RAM_TEMP_0} {ADDRESSES.RAM_TEMP_1} ");
+                        }
+                        else if (address1Immediate)
+                        {
+                            result.Add($"{ALU.MOVE + OP.IMMEDIATE0} {address0} 0 {ADDRESSES.RAM_ADDRESS}{Comment("Move first address to ram-address-register")}"); // move first address to ram read
+                            result.Add($"{ALU.MOVE} 0 0 {ADDRESSES.RAM_TEMP_0}{Comment("Move first value to ram-temp-0")}");
+
+                            result.Add($"{OP.CONDITIONS + CONDITIONS.SMALLER + CONDITIONS.JUMP_IF_RESULT + OP.IMMEDIATE1} {ADDRESSES.RAM_TEMP_0} {address1} ");
+                        }
+                        else if (address0Immediate)
+                        {
+                            result.Add($"{ALU.MOVE + OP.IMMEDIATE0} {address1} 0 {ADDRESSES.RAM_ADDRESS}{Comment("Move second address to ram-address-register")}"); // move first address to ram read
+                            result.Add($"{ALU.MOVE} 0 0 {ADDRESSES.RAM_TEMP_0}{Comment("Move second value to ram-temp-0")}");
+
+                            result.Add($"{OP.CONDITIONS + CONDITIONS.SMALLER + CONDITIONS.JUMP_IF_RESULT + OP.IMMEDIATE0} {address0} {ADDRESSES.RAM_TEMP_0} ");
+                        }
+                        else
+                        {
+                            result.Add($"{OP.CONDITIONS + CONDITIONS.SMALLER + CONDITIONS.JUMP_IF_RESULT + OP.IMMEDIATE0 + OP.IMMEDIATE1} {address0} {address1} ");
+                        }
+                    }
+                    else
+                    {
+                        var _address0 = keywords[1].Trim();
+                        var _address1 = keywords[2].Trim();
+                        var _resultAddress = keywords[3].Trim();
+
+                        // get value for variable
+                        if (!scopeManager.currentScope.ResolveAddress(_address0, out int address0, out bool address0Immediate))
+                        {
+                            throw new Exception("Memory address could not be resolved");
+                        }
+
+                        // get value for variable
+                        if (!scopeManager.currentScope.ResolveAddress(_address1, out int address1, out bool address1Immediate))
+                        {
+                            throw new Exception("Memory address could not be resolved");
+                        }
+
+                        if (!scopeManager.currentScope.ResolveAddress(_resultAddress, out int resultAddress, out bool resultImmediate) || resultImmediate)
+                        {
+                            throw new Exception("Memory address could not be resolved");
+                        }
+
+                        if (!address0Immediate && !address1Immediate)
+                        {
+                            result.Add($"{ALU.MOVE + OP.IMMEDIATE0} {address0} 0 {ADDRESSES.RAM_ADDRESS}{Comment("Move first address to ram-address-register")}"); // move first address to ram read
+                            result.Add($"{ALU.MOVE} 0 0 {ADDRESSES.RAM_TEMP_0}{Comment("Move first value to ram-temp-0")}");
+                            result.Add($"{ALU.MOVE + OP.IMMEDIATE0} {address1} 0 {ADDRESSES.RAM_ADDRESS}{Comment("Move second address to ram-address-register")}"); // move second address to ram read
+                            result.Add($"{ALU.MOVE} 0 0 {ADDRESSES.RAM_TEMP_1}{Comment("Move second value to ram-temp-1")}");
+
+                            result.Add($"{ALU.MOVE + OP.IMMEDIATE0} {resultAddress} 0 {ADDRESSES.RAM_ADDRESS}{Comment("Move result address to ram-address-register")}");
+                            result.Add($"{OP.CONDITIONS + CONDITIONS.SMALLER + CONDITIONS.JUMP_IF_RESULT} {ADDRESSES.RAM_TEMP_0} {ADDRESSES.RAM_TEMP_1} {ADDRESSES.RAM}");
+                        }
+                        else if (address1Immediate)
+                        {
+                            result.Add($"{ALU.MOVE + OP.IMMEDIATE0} {address0} 0 {ADDRESSES.RAM_ADDRESS}{Comment("Move first address to ram-address-register")}"); // move first address to ram read
+                            result.Add($"{ALU.MOVE} 0 0 {ADDRESSES.RAM_TEMP_0}{Comment("Move first value to ram-temp-0")}");
+
+                            result.Add($"{ALU.MOVE + OP.IMMEDIATE0} {resultAddress} 0 {ADDRESSES.RAM_ADDRESS}{Comment("Move result address to ram-address-register")}");
+                            result.Add($"{OP.CONDITIONS + CONDITIONS.SMALLER + CONDITIONS.JUMP_IF_RESULT + OP.IMMEDIATE1} {ADDRESSES.RAM_TEMP_0} {address1} {ADDRESSES.RAM}");
+                        }
+                        else if (address0Immediate)
+                        {
+                            result.Add($"{ALU.MOVE + OP.IMMEDIATE0} {address1} 0 {ADDRESSES.RAM_ADDRESS}{Comment("Move second address to ram-address-register")}"); // move first address to ram read
+                            result.Add($"{ALU.MOVE} 0 0 {ADDRESSES.RAM_TEMP_0}{Comment("Move second value to ram-temp-0")}");
+
+                            result.Add($"{ALU.MOVE + OP.IMMEDIATE0} {resultAddress} 0 {ADDRESSES.RAM_ADDRESS}{Comment("Move result address to ram-address-register")}");
+                            result.Add($"{OP.CONDITIONS + CONDITIONS.SMALLER + CONDITIONS.JUMP_IF_RESULT + OP.IMMEDIATE0} {address0} {ADDRESSES.RAM_TEMP_0} {ADDRESSES.RAM}");
+                        }
+                        else
+                        {
+                            result.Add($"{ALU.MOVE + OP.IMMEDIATE0} {resultAddress} 0 {ADDRESSES.RAM_ADDRESS}{Comment("Move result address to ram-address-register")}");
+                            result.Add($"{OP.CONDITIONS + CONDITIONS.SMALLER + OP.IMMEDIATE0 + OP.IMMEDIATE1} {address0} {address1} {ADDRESSES.RAM}");
+                        }
+                    }
+                    break;
+                }
+            case "SMEQ":
+                {
+                    // Code for SMALLEREQUAL case
+                    if (in_if || in_while)
+                    {
+                        var _address0 = keywords[1].Trim();
+                        var _address1 = keywords[2].Trim();
+
+                        // get value for variable
+                        if (!scopeManager.currentScope.ResolveAddress(_address0, out int address0, out bool address0Immediate))
+                        {
+                            throw new Exception("Memory address could not be resolved");
+                        }
+
+                        // get value for variable
+                        if (!scopeManager.currentScope.ResolveAddress(_address1, out int address1, out bool address1Immediate))
+                        {
+                            throw new Exception("Memory address could not be resolved");
+                        }
+
+                        if (!address0Immediate && !address1Immediate)
+                        {
+                            result.Add($"{ALU.MOVE + OP.IMMEDIATE0} {address0} 0 {ADDRESSES.RAM_ADDRESS}{Comment("Move first address to ram-address-register")}"); // move first address to ram read
+                            result.Add($"{ALU.MOVE} 0 0 {ADDRESSES.RAM_TEMP_0}{Comment("Move first value to ram-temp-0")}");
+                            result.Add($"{ALU.MOVE + OP.IMMEDIATE0} {address1} 0 {ADDRESSES.RAM_ADDRESS}{Comment("Move second address to ram-address-register")}"); // move second address to ram read
+                            result.Add($"{ALU.MOVE} 0 0 {ADDRESSES.RAM_TEMP_1}{Comment("Move second value to ram-temp-1")}");
+
+                            result.Add($"{OP.CONDITIONS + CONDITIONS.SMALLEREQUAL + CONDITIONS.JUMP_IF_RESULT} {ADDRESSES.RAM_TEMP_0} {ADDRESSES.RAM_TEMP_1} ");
+                        }
+                        else if (address1Immediate)
+                        {
+                            result.Add($"{ALU.MOVE + OP.IMMEDIATE0} {address0} 0 {ADDRESSES.RAM_ADDRESS}{Comment("Move first address to ram-address-register")}"); // move first address to ram read
+                            result.Add($"{ALU.MOVE} 0 0 {ADDRESSES.RAM_TEMP_0}{Comment("Move first value to ram-temp-0")}");
+
+                            result.Add($"{OP.CONDITIONS + CONDITIONS.SMALLEREQUAL + CONDITIONS.JUMP_IF_RESULT + OP.IMMEDIATE1} {ADDRESSES.RAM_TEMP_0} {address1} ");
+                        }
+                        else if (address0Immediate)
+                        {
+                            result.Add($"{ALU.MOVE + OP.IMMEDIATE0} {address1} 0 {ADDRESSES.RAM_ADDRESS}{Comment("Move second address to ram-address-register")}"); // move first address to ram read
+                            result.Add($"{ALU.MOVE} 0 0 {ADDRESSES.RAM_TEMP_0}{Comment("Move second value to ram-temp-0")}");
+
+                            result.Add($"{OP.CONDITIONS + CONDITIONS.SMALLEREQUAL + CONDITIONS.JUMP_IF_RESULT + OP.IMMEDIATE0} {address0} {ADDRESSES.RAM_TEMP_0} ");
+                        }
+                        else
+                        {
+                            result.Add($"{OP.CONDITIONS + CONDITIONS.SMALLEREQUAL + CONDITIONS.JUMP_IF_RESULT + OP.IMMEDIATE0 + OP.IMMEDIATE1} {address0} {address1} ");
+                        }
+                    }
+                    else
+                    {
+                        var _address0 = keywords[1].Trim();
+                        var _address1 = keywords[2].Trim();
+                        var _resultAddress = keywords[3].Trim();
+
+                        // get value for variable
+                        if (!scopeManager.currentScope.ResolveAddress(_address0, out int address0, out bool address0Immediate))
+                        {
+                            throw new Exception("Memory address could not be resolved");
+                        }
+
+                        // get value for variable
+                        if (!scopeManager.currentScope.ResolveAddress(_address1, out int address1, out bool address1Immediate))
+                        {
+                            throw new Exception("Memory address could not be resolved");
+                        }
+
+                        if (!scopeManager.currentScope.ResolveAddress(_resultAddress, out int resultAddress, out bool resultImmediate) || resultImmediate)
+                        {
+                            throw new Exception("Memory address could not be resolved");
+                        }
+
+                        if (!address0Immediate && !address1Immediate)
+                        {
+                            result.Add($"{ALU.MOVE + OP.IMMEDIATE0} {address0} 0 {ADDRESSES.RAM_ADDRESS}{Comment("Move first address to ram-address-register")}"); // move first address to ram read
+                            result.Add($"{ALU.MOVE} 0 0 {ADDRESSES.RAM_TEMP_0}{Comment("Move first value to ram-temp-0")}");
+                            result.Add($"{ALU.MOVE + OP.IMMEDIATE0} {address1} 0 {ADDRESSES.RAM_ADDRESS}{Comment("Move second address to ram-address-register")}"); // move second address to ram read
+                            result.Add($"{ALU.MOVE} 0 0 {ADDRESSES.RAM_TEMP_1}{Comment("Move second value to ram-temp-1")}");
+
+                            result.Add($"{ALU.MOVE + OP.IMMEDIATE0} {resultAddress} 0 {ADDRESSES.RAM_ADDRESS}{Comment("Move result address to ram-address-register")}");
+                            result.Add($"{OP.CONDITIONS + CONDITIONS.SMALLEREQUAL + CONDITIONS.JUMP_IF_RESULT} {ADDRESSES.RAM_TEMP_0} {ADDRESSES.RAM_TEMP_1} {ADDRESSES.RAM}");
+                        }
+                        else if (address1Immediate)
+                        {
+                            result.Add($"{ALU.MOVE + OP.IMMEDIATE0} {address0} 0 {ADDRESSES.RAM_ADDRESS}{Comment("Move first address to ram-address-register")}"); // move first address to ram read
+                            result.Add($"{ALU.MOVE} 0 0 {ADDRESSES.RAM_TEMP_0}{Comment("Move first value to ram-temp-0")}");
+
+                            result.Add($"{ALU.MOVE + OP.IMMEDIATE0} {resultAddress} 0 {ADDRESSES.RAM_ADDRESS}{Comment("Move result address to ram-address-register")}");
+                            result.Add($"{OP.CONDITIONS + CONDITIONS.SMALLEREQUAL + CONDITIONS.JUMP_IF_RESULT + OP.IMMEDIATE1} {ADDRESSES.RAM_TEMP_0} {address1} {ADDRESSES.RAM}");
+                        }
+                        else if (address0Immediate)
+                        {
+                            result.Add($"{ALU.MOVE + OP.IMMEDIATE0} {address1} 0 {ADDRESSES.RAM_ADDRESS}{Comment("Move second address to ram-address-register")}"); // move first address to ram read
+                            result.Add($"{ALU.MOVE} 0 0 {ADDRESSES.RAM_TEMP_0}{Comment("Move second value to ram-temp-0")}");
+
+                            result.Add($"{ALU.MOVE + OP.IMMEDIATE0} {resultAddress} 0 {ADDRESSES.RAM_ADDRESS}{Comment("Move result address to ram-address-register")}");
+                            result.Add($"{OP.CONDITIONS + CONDITIONS.SMALLEREQUAL + CONDITIONS.JUMP_IF_RESULT + OP.IMMEDIATE0} {address0} {ADDRESSES.RAM_TEMP_0} {ADDRESSES.RAM}");
+                        }
+                        else
+                        {
+                            result.Add($"{ALU.MOVE + OP.IMMEDIATE0} {resultAddress} 0 {ADDRESSES.RAM_ADDRESS}{Comment("Move result address to ram-address-register")}");
+                            result.Add($"{OP.CONDITIONS + CONDITIONS.SMALLEREQUAL + OP.IMMEDIATE0 + OP.IMMEDIATE1} {address0} {address1} {ADDRESSES.RAM}");
+                        }
+                    }
+                    break;
+                }
+            case "GR":
+                {
+                    // Code for GREATER case
+                    if (in_if || in_while)
+                    {
+                        var _address0 = keywords[1].Trim();
+                        var _address1 = keywords[2].Trim();
+
+                        // get value for variable
+                        if (!scopeManager.currentScope.ResolveAddress(_address0, out int address0, out bool address0Immediate))
+                        {
+                            throw new Exception("Memory address could not be resolved");
+                        }
+
+                        // get value for variable
+                        if (!scopeManager.currentScope.ResolveAddress(_address1, out int address1, out bool address1Immediate))
+                        {
+                            throw new Exception("Memory address could not be resolved");
+                        }
+
+                        if (!address0Immediate && !address1Immediate)
+                        {
+                            result.Add($"{ALU.MOVE + OP.IMMEDIATE0} {address0} 0 {ADDRESSES.RAM_ADDRESS}{Comment("Move first address to ram-address-register")}"); // move first address to ram read
+                            result.Add($"{ALU.MOVE} 0 0 {ADDRESSES.RAM_TEMP_0}{Comment("Move first value to ram-temp-0")}");
+                            result.Add($"{ALU.MOVE + OP.IMMEDIATE0} {address1} 0 {ADDRESSES.RAM_ADDRESS}{Comment("Move second address to ram-address-register")}"); // move second address to ram read
+                            result.Add($"{ALU.MOVE} 0 0 {ADDRESSES.RAM_TEMP_1}{Comment("Move second value to ram-temp-1")}");
+
+                            result.Add($"{OP.CONDITIONS + CONDITIONS.GREATER + CONDITIONS.JUMP_IF_RESULT} {ADDRESSES.RAM_TEMP_0} {ADDRESSES.RAM_TEMP_1} ");
+                        }
+                        else if (address1Immediate)
+                        {
+                            result.Add($"{ALU.MOVE + OP.IMMEDIATE0} {address0} 0 {ADDRESSES.RAM_ADDRESS}{Comment("Move first address to ram-address-register")}"); // move first address to ram read
+                            result.Add($"{ALU.MOVE} 0 0 {ADDRESSES.RAM_TEMP_0}{Comment("Move first value to ram-temp-0")}");
+
+                            result.Add($"{OP.CONDITIONS + CONDITIONS.GREATER + CONDITIONS.JUMP_IF_RESULT + OP.IMMEDIATE1} {ADDRESSES.RAM_TEMP_0} {address1} ");
+                        }
+                        else if (address0Immediate)
+                        {
+                            result.Add($"{ALU.MOVE + OP.IMMEDIATE0} {address1} 0 {ADDRESSES.RAM_ADDRESS}{Comment("Move second address to ram-address-register")}"); // move first address to ram read
+                            result.Add($"{ALU.MOVE} 0 0 {ADDRESSES.RAM_TEMP_0}{Comment("Move second value to ram-temp-0")}");
+
+                            result.Add($"{OP.CONDITIONS + CONDITIONS.GREATER + CONDITIONS.JUMP_IF_RESULT + OP.IMMEDIATE0} {address0} {ADDRESSES.RAM_TEMP_0} ");
+                        }
+                        else
+                        {
+                            result.Add($"{OP.CONDITIONS + CONDITIONS.GREATER + CONDITIONS.JUMP_IF_RESULT + OP.IMMEDIATE0 + OP.IMMEDIATE1} {address0} {address1} ");
+                        }
+                    }
+                    else
+                    {
+                        var _address0 = keywords[1].Trim();
+                        var _address1 = keywords[2].Trim();
+                        var _resultAddress = keywords[3].Trim();
+
+                        // get value for variable
+                        if (!scopeManager.currentScope.ResolveAddress(_address0, out int address0, out bool address0Immediate))
+                        {
+                            throw new Exception("Memory address could not be resolved");
+                        }
+
+                        // get value for variable
+                        if (!scopeManager.currentScope.ResolveAddress(_address1, out int address1, out bool address1Immediate))
+                        {
+                            throw new Exception("Memory address could not be resolved");
+                        }
+
+                        if (!scopeManager.currentScope.ResolveAddress(_resultAddress, out int resultAddress, out bool resultImmediate) || resultImmediate)
+                        {
+                            throw new Exception("Memory address could not be resolved");
+                        }
+
+                        if (!address0Immediate && !address1Immediate)
+                        {
+                            result.Add($"{ALU.MOVE + OP.IMMEDIATE0} {address0} 0 {ADDRESSES.RAM_ADDRESS}{Comment("Move first address to ram-address-register")}"); // move first address to ram read
+                            result.Add($"{ALU.MOVE} 0 0 {ADDRESSES.RAM_TEMP_0}{Comment("Move first value to ram-temp-0")}");
+                            result.Add($"{ALU.MOVE + OP.IMMEDIATE0} {address1} 0 {ADDRESSES.RAM_ADDRESS}{Comment("Move second address to ram-address-register")}"); // move second address to ram read
+                            result.Add($"{ALU.MOVE} 0 0 {ADDRESSES.RAM_TEMP_1}{Comment("Move second value to ram-temp-1")}");
+
+                            result.Add($"{ALU.MOVE + OP.IMMEDIATE0} {resultAddress} 0 {ADDRESSES.RAM_ADDRESS}{Comment("Move result address to ram-address-register")}");
+                            result.Add($"{OP.CONDITIONS + CONDITIONS.GREATER + CONDITIONS.JUMP_IF_RESULT} {ADDRESSES.RAM_TEMP_0} {ADDRESSES.RAM_TEMP_1} {ADDRESSES.RAM}");
+                        }
+                        else if (address1Immediate)
+                        {
+                            result.Add($"{ALU.MOVE + OP.IMMEDIATE0} {address0} 0 {ADDRESSES.RAM_ADDRESS}{Comment("Move first address to ram-address-register")}"); // move first address to ram read
+                            result.Add($"{ALU.MOVE} 0 0 {ADDRESSES.RAM_TEMP_0}{Comment("Move first value to ram-temp-0")}");
+
+                            result.Add($"{ALU.MOVE + OP.IMMEDIATE0} {resultAddress} 0 {ADDRESSES.RAM_ADDRESS}{Comment("Move result address to ram-address-register")}");
+                            result.Add($"{OP.CONDITIONS + CONDITIONS.GREATER + CONDITIONS.JUMP_IF_RESULT + OP.IMMEDIATE1} {ADDRESSES.RAM_TEMP_0} {address1} {ADDRESSES.RAM}");
+                        }
+                        else if (address0Immediate)
+                        {
+                            result.Add($"{ALU.MOVE + OP.IMMEDIATE0} {address1} 0 {ADDRESSES.RAM_ADDRESS}{Comment("Move second address to ram-address-register")}"); // move first address to ram read
+                            result.Add($"{ALU.MOVE} 0 0 {ADDRESSES.RAM_TEMP_0}{Comment("Move second value to ram-temp-0")}");
+
+                            result.Add($"{ALU.MOVE + OP.IMMEDIATE0} {resultAddress} 0 {ADDRESSES.RAM_ADDRESS}{Comment("Move result address to ram-address-register")}");
+                            result.Add($"{OP.CONDITIONS + CONDITIONS.GREATER + CONDITIONS.JUMP_IF_RESULT + OP.IMMEDIATE0} {address0} {ADDRESSES.RAM_TEMP_0} {ADDRESSES.RAM}");
+                        }
+                        else
+                        {
+                            result.Add($"{ALU.MOVE + OP.IMMEDIATE0} {resultAddress} 0 {ADDRESSES.RAM_ADDRESS}{Comment("Move result address to ram-address-register")}");
+                            result.Add($"{OP.CONDITIONS + CONDITIONS.GREATER + OP.IMMEDIATE0 + OP.IMMEDIATE1} {address0} {address1} {ADDRESSES.RAM}");
+                        }
+                    }
+                    break;
+                }
+            case "GREQ":
+                {
+                    // Code for GREATEREQUAL case
+                    if (in_if || in_while)
+                    {
+                        var _address0 = keywords[1].Trim();
+                        var _address1 = keywords[2].Trim();
+
+                        // get value for variable
+                        if (!scopeManager.currentScope.ResolveAddress(_address0, out int address0, out bool address0Immediate))
+                        {
+                            throw new Exception("Memory address could not be resolved");
+                        }
+
+                        // get value for variable
+                        if (!scopeManager.currentScope.ResolveAddress(_address1, out int address1, out bool address1Immediate))
+                        {
+                            throw new Exception("Memory address could not be resolved");
+                        }
+
+                        if (!address0Immediate && !address1Immediate)
+                        {
+                            result.Add($"{ALU.MOVE + OP.IMMEDIATE0} {address0} 0 {ADDRESSES.RAM_ADDRESS}{Comment("Move first address to ram-address-register")}"); // move first address to ram read
+                            result.Add($"{ALU.MOVE} 0 0 {ADDRESSES.RAM_TEMP_0}{Comment("Move first value to ram-temp-0")}");
+                            result.Add($"{ALU.MOVE + OP.IMMEDIATE0} {address1} 0 {ADDRESSES.RAM_ADDRESS}{Comment("Move second address to ram-address-register")}"); // move second address to ram read
+                            result.Add($"{ALU.MOVE} 0 0 {ADDRESSES.RAM_TEMP_1}{Comment("Move second value to ram-temp-1")}");
+
+                            result.Add($"{OP.CONDITIONS + CONDITIONS.GREATEREQUAL + CONDITIONS.JUMP_IF_RESULT} {ADDRESSES.RAM_TEMP_0} {ADDRESSES.RAM_TEMP_1} ");
+                        }
+                        else if (address1Immediate)
+                        {
+                            result.Add($"{ALU.MOVE + OP.IMMEDIATE0} {address0} 0 {ADDRESSES.RAM_ADDRESS}{Comment("Move first address to ram-address-register")}"); // move first address to ram read
+                            result.Add($"{ALU.MOVE} 0 0 {ADDRESSES.RAM_TEMP_0}{Comment("Move first value to ram-temp-0")}");
+
+                            result.Add($"{OP.CONDITIONS + CONDITIONS.GREATEREQUAL + CONDITIONS.JUMP_IF_RESULT + OP.IMMEDIATE1} {ADDRESSES.RAM_TEMP_0} {address1} ");
+                        }
+                        else if (address0Immediate)
+                        {
+                            result.Add($"{ALU.MOVE + OP.IMMEDIATE0} {address1} 0 {ADDRESSES.RAM_ADDRESS}{Comment("Move second address to ram-address-register")}"); // move first address to ram read
+                            result.Add($"{ALU.MOVE} 0 0 {ADDRESSES.RAM_TEMP_0}{Comment("Move second value to ram-temp-0")}");
+
+                            result.Add($"{OP.CONDITIONS + CONDITIONS.GREATEREQUAL + CONDITIONS.JUMP_IF_RESULT + OP.IMMEDIATE0} {address0} {ADDRESSES.RAM_TEMP_0} ");
+                        }
+                        else
+                        {
+                            result.Add($"{OP.CONDITIONS + CONDITIONS.GREATEREQUAL + CONDITIONS.JUMP_IF_RESULT + OP.IMMEDIATE0 + OP.IMMEDIATE1} {address0} {address1} ");
+                        }
+                    }
+                    else
+                    {
+                        var _address0 = keywords[1].Trim();
+                        var _address1 = keywords[2].Trim();
+                        var _resultAddress = keywords[3].Trim();
+
+                        // get value for variable
+                        if (!scopeManager.currentScope.ResolveAddress(_address0, out int address0, out bool address0Immediate))
+                        {
+                            throw new Exception("Memory address could not be resolved");
+                        }
+
+                        // get value for variable
+                        if (!scopeManager.currentScope.ResolveAddress(_address1, out int address1, out bool address1Immediate))
+                        {
+                            throw new Exception("Memory address could not be resolved");
+                        }
+
+                        if (!scopeManager.currentScope.ResolveAddress(_resultAddress, out int resultAddress, out bool resultImmediate) || resultImmediate)
+                        {
+                            throw new Exception("Memory address could not be resolved");
+                        }
+
+                        if (!address0Immediate && !address1Immediate)
+                        {
+                            result.Add($"{ALU.MOVE + OP.IMMEDIATE0} {address0} 0 {ADDRESSES.RAM_ADDRESS}{Comment("Move first address to ram-address-register")}"); // move first address to ram read
+                            result.Add($"{ALU.MOVE} 0 0 {ADDRESSES.RAM_TEMP_0}{Comment("Move first value to ram-temp-0")}");
+                            result.Add($"{ALU.MOVE + OP.IMMEDIATE0} {address1} 0 {ADDRESSES.RAM_ADDRESS}{Comment("Move second address to ram-address-register")}"); // move second address to ram read
+                            result.Add($"{ALU.MOVE} 0 0 {ADDRESSES.RAM_TEMP_1}{Comment("Move second value to ram-temp-1")}");
+
+                            result.Add($"{ALU.MOVE + OP.IMMEDIATE0} {resultAddress} 0 {ADDRESSES.RAM_ADDRESS}{Comment("Move result address to ram-address-register")}");
+                            result.Add($"{OP.CONDITIONS + CONDITIONS.GREATEREQUAL + CONDITIONS.JUMP_IF_RESULT} {ADDRESSES.RAM_TEMP_0} {ADDRESSES.RAM_TEMP_1} {ADDRESSES.RAM}");
+                        }
+                        else if (address1Immediate)
+                        {
+                            result.Add($"{ALU.MOVE + OP.IMMEDIATE0} {address0} 0 {ADDRESSES.RAM_ADDRESS}{Comment("Move first address to ram-address-register")}"); // move first address to ram read
+                            result.Add($"{ALU.MOVE} 0 0 {ADDRESSES.RAM_TEMP_0}{Comment("Move first value to ram-temp-0")}");
+
+                            result.Add($"{ALU.MOVE + OP.IMMEDIATE0} {resultAddress} 0 {ADDRESSES.RAM_ADDRESS}{Comment("Move result address to ram-address-register")}");
+                            result.Add($"{OP.CONDITIONS + CONDITIONS.GREATEREQUAL + CONDITIONS.JUMP_IF_RESULT + OP.IMMEDIATE1} {ADDRESSES.RAM_TEMP_0} {address1} {ADDRESSES.RAM}");
+                        }
+                        else if (address0Immediate)
+                        {
+                            result.Add($"{ALU.MOVE + OP.IMMEDIATE0} {address1} 0 {ADDRESSES.RAM_ADDRESS}{Comment("Move second address to ram-address-register")}"); // move first address to ram read
+                            result.Add($"{ALU.MOVE} 0 0 {ADDRESSES.RAM_TEMP_0}{Comment("Move second value to ram-temp-0")}");
+
+                            result.Add($"{ALU.MOVE + OP.IMMEDIATE0} {resultAddress} 0 {ADDRESSES.RAM_ADDRESS}{Comment("Move result address to ram-address-register")}");
+                            result.Add($"{OP.CONDITIONS + CONDITIONS.GREATEREQUAL + CONDITIONS.JUMP_IF_RESULT + OP.IMMEDIATE0} {address0} {ADDRESSES.RAM_TEMP_0} {ADDRESSES.RAM}");
+                        }
+                        else
+                        {
+                            result.Add($"{ALU.MOVE + OP.IMMEDIATE0} {resultAddress} 0 {ADDRESSES.RAM_ADDRESS}{Comment("Move result address to ram-address-register")}");
+                            result.Add($"{OP.CONDITIONS + CONDITIONS.GREATEREQUAL + OP.IMMEDIATE0 + OP.IMMEDIATE1} {address0} {address1} {ADDRESSES.RAM}");
+                        }
+                    }
+                    break;
+                }
+            case "AW":
+                {
+                    // Code for ALLWAYS case
+                    if (in_if || in_while)
+                    {
+                        result.Add($"{OP.CONDITIONS + CONDITIONS.ALLWAYS + OP.IMMEDIATE0 + OP.IMMEDIATE1 + CONDITIONS.JUMP_IF_RESULT} 0 0 ");
+                    }
+                    else
+                    {
+                        var _resultAddress = keywords[3].Trim();
+
+                        if (!scopeManager.currentScope.ResolveAddress(_resultAddress, out int resultAddress, out bool resultImmediate) || resultImmediate)
+                        {
+                            throw new Exception("Memory address could not be resolved");
+                        }
+
+                        result.Add($"{ALU.MOVE + OP.IMMEDIATE0} {resultAddress} 0 {ADDRESSES.RAM_ADDRESS}{Comment("Move result address to ram-address-register")}");
+                        result.Add($"{OP.CONDITIONS + CONDITIONS.ALLWAYS + OP.IMMEDIATE0 + OP.IMMEDIATE1} 0 0 {ADDRESSES.RAM}");
+                    }
+                    break;
+                }
+            case "NV":
+                {
+                    // Code for NEVER case
+                    if (in_if || in_while)
+                    {
+                        result.Add($"{OP.CONDITIONS + CONDITIONS.NEVER + OP.IMMEDIATE0 + OP.IMMEDIATE1 + CONDITIONS.JUMP_IF_RESULT} 0 0 ");
+                    }
+                    else
+                    {
+                        var _resultAddress = keywords[3].Trim();
+
+                        if (!scopeManager.currentScope.ResolveAddress(_resultAddress, out int resultAddress, out bool resultImmediate) || resultImmediate)
+                        {
+                            throw new Exception("Memory address could not be resolved");
+                        }
+
+                        result.Add($"{ALU.MOVE + OP.IMMEDIATE0} {resultAddress} 0 {ADDRESSES.RAM_ADDRESS}{Comment("Move result address to ram-address-register")}");
+                        result.Add($"{OP.CONDITIONS + CONDITIONS.NEVER + OP.IMMEDIATE0 + OP.IMMEDIATE1} 0 0 {ADDRESSES.RAM}");
+                    }
+                    break;
+                }
+            
         }
+
+        return result;
     }
 
     public string Process()
@@ -303,10 +1167,14 @@ internal class Compiler
             }
             this.line++;
 
-            ProcessLine(lineCode);
+            List<string> compiled = ProcessLine(lineCode, false, false);
+            foreach (string item in compiled)
+            {
+                final.Add(item);
+            }
         }
 
-        return string.Join("\n", result);
+        return string.Join("\n", final);
     }
 
 
